@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Freddy's Burger — Gestión</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="login-screen">
+    <div class="login-card">
+      <h1>Freddy's Burger</h1>
+      <p>Sistema de gestión de stock y pedidos</p>
+      <input type="email" id="email" placeholder="Tu email" />
+      <input type="password" id="password" placeholder="Contraseña" />
+      <button onclick="login()">Entrar</button>
+      <p id="login-error" class="error"></p>
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
+    <nav>
+      <div class="nav-brand">🍔 Freddy's Burger</div>
+      <div class="nav-user">
+        <span id="nav-local"></span>
+        <span id="nav-rol"></span>
+        <button onclick="logout()">Salir</button>
+      </div>
+    </nav>
+
+    <div class="tabs" id="tabs">
+      <button class="tab active" onclick="showTab('stock', this)">Stock</button>
+      <button class="tab" onclick="showTab('pedidos', this)">Pedidos</button>
+      <button class="tab" onclick="showTab('traspasos', this)">Traspasos</button>
+      <button class="tab admin-only" onclick="showTab('admin', this)">Admin</button>
+    </div>
+
+    <div class="content">
+      <div id="tab-stock" class="tab-content active"></div>
+      <div id="tab-pedidos" class="tab-content"></div>
+      <div id="tab-traspasos" class="tab-content"></div>
+      <div id="tab-admin" class="tab-content admin-only"></div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
