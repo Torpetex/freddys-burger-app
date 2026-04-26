@@ -8,6 +8,8 @@ let currentUsuario = null;
 let locales = [];
 let localActual = null;
 let stockItems = [];
+let localCompra = null;
+let productos = [];
 
 // ─── AUTH ────────────────────────────────────────────────
 async function login() {
@@ -29,42 +31,31 @@ async function logout() {
 }
 
 async function iniciarApp() {
-  // 1. Cargar perfil del usuario
   const { data: usuario, error: uError } = await db
-    .from('usuarios')
-    .select('*, locales(*)')
-    .eq('id', currentUser.id)
-    .single();
-
+    .from('usuarios').select('*, locales(*)').eq('id', currentUser.id).single();
   if (uError || !usuario) {
     document.getElementById('login-error').textContent = 'No tienes perfil asignado. Contacta con el administrador.';
-    await db.auth.signOut();
-    return;
+    await db.auth.signOut(); return;
   }
   currentUsuario = usuario;
-
-  // 2. Cargar locales
   const { data: ls } = await db.from('locales').select('*').order('ciudad');
   locales = ls || [];
-
-  // 3. Determinar local actual
+  const { data: prods } = await db.from('productos').select('id, nombre, unidad, proveedor, coste').order('nombre');
+  productos = prods || [];
   const isAdmin = currentUsuario.rol === 'admin';
   localActual = isAdmin ? (locales[0]?.id || null) : currentUsuario.local_id;
-
-  // 4. Mostrar app
+  localCompra = localActual;
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   if (isAdmin) document.getElementById('app').classList.add('is-admin');
-
   document.getElementById('nav-local').textContent = isAdmin ? 'Todos los locales' : (currentUsuario.locales?.ciudad || '');
   document.getElementById('nav-rol').textContent = isAdmin ? 'Admin' : 'Encargado';
-
-  // 5. Renderizar secciones
   await renderStock();
+  await renderCompra();
   await renderPedidos();
+  await renderAlbaranes();
   await renderTraspasos();
   if (isAdmin) await renderAdmin();
-  await renderCompra();
 }
 
 // ─── TABS ────────────────────────────────────────────────
@@ -79,22 +70,16 @@ function showTab(name, btn) {
 async function renderStock() {
   const isAdmin = currentUsuario?.rol === 'admin';
   const el = document.getElementById('tab-stock');
-
   let localSelectorHTML = '';
   if (isAdmin && locales.length > 0) {
     localSelectorHTML = `<div class="local-selector">
-      ${locales.map((l, i) => `
-        <button class="local-btn ${i === 0 ? 'active' : ''}"
-          onclick="cambiarLocal('${l.id}', this)">${l.ciudad}</button>
-      `).join('')}
+      ${locales.map((l, i) => `<button class="local-btn ${i === 0 ? 'active' : ''}"
+        onclick="cambiarLocal('${l.id}', this)">${l.ciudad}</button>`).join('')}
     </div>`;
   }
-
   el.innerHTML = `
     ${localSelectorHTML}
-    <div class="metrics" id="stock-metrics">
-      <div class="metric"><div class="metric-label">Cargando...</div></div>
-    </div>
+    <div class="metrics" id="stock-metrics"><div class="metric"><div class="metric-label">Cargando...</div></div></div>
     <div class="card">
       <div class="card-header">
         <span class="card-title">Inventario</span>
@@ -110,60 +95,32 @@ async function renderStock() {
         <input type="text" placeholder="Buscar producto..." id="filtro-texto" oninput="filtrarStock()">
         <select id="filtro-grupo" onchange="filtrarStock()">
           <option value="">Todos los grupos</option>
-          <option>Carnes y pescados</option>
-          <option>Lácteos y huevos</option>
-          <option>Frutas y verduras</option>
-          <option>Salsas</option>
-          <option>Secos y granos</option>
-          <option>Desechables</option>
-          <option>Subrecetas</option>
-          <option>Otros</option>
+          <option>Carnes y pescados</option><option>Lácteos y huevos</option>
+          <option>Frutas y verduras</option><option>Salsas</option>
+          <option>Secos y granos</option><option>Desechables</option>
+          <option>Subrecetas</option><option>Otros</option>
         </select>
       </div>
       <div id="stock-loading" style="padding:2rem;text-align:center;color:#aaa">Cargando productos...</div>
       <div style="overflow-x:auto">
         <table>
-          <thead><tr>
-            <th>Producto</th><th>Stock actual</th><th>Mínimo</th>
-            <th>Proveedor</th><th>Grupo</th><th>Estado</th>
-          </tr></thead>
+          <thead><tr><th>Producto</th><th>Stock actual</th><th>Mínimo</th><th>Proveedor</th><th>Grupo</th><th>Estado</th></tr></thead>
           <tbody id="tabla-stock"></tbody>
         </table>
       </div>
     </div>`;
-
   await cargarStock();
 }
 
 async function cargarStock() {
-  if (!localActual) {
-    document.getElementById('stock-loading').textContent = 'Error: no hay local seleccionado.';
-    return;
-  }
-
+  if (!localActual) { document.getElementById('stock-loading').textContent = 'Error: no hay local seleccionado.'; return; }
   document.getElementById('stock-loading').style.display = 'block';
   document.getElementById('stock-loading').textContent = 'Cargando productos...';
-
-  const { data, error } = await db
-    .from('stock')
-    .select('*, productos(*)')
-    .eq('local_id', localActual);
-
+  const { data, error } = await db.from('stock').select('*, productos(*)').eq('local_id', localActual);
   document.getElementById('stock-loading').style.display = 'none';
-
-  if (error) {
-    console.error('Error:', error);
-    document.getElementById('stock-loading').style.display = 'block';
-    document.getElementById('stock-loading').textContent = 'Error cargando productos: ' + error.message;
-    return;
-  }
-
-  stockItems = (data || []).sort((a, b) =>
-    a.productos.nombre.localeCompare(b.productos.nombre)
-  );
-
-  actualizarMetricasStock();
-  filtrarStock();
+  if (error) { document.getElementById('stock-loading').style.display = 'block'; document.getElementById('stock-loading').textContent = 'Error: ' + error.message; return; }
+  stockItems = (data || []).sort((a, b) => a.productos.nombre.localeCompare(b.productos.nombre));
+  actualizarMetricasStock(); filtrarStock();
 }
 
 function actualizarMetricasStock() {
@@ -175,15 +132,13 @@ function actualizarMetricasStock() {
     <div class="metric"><div class="metric-label">Productos</div><div class="metric-value">${stockItems.length}</div></div>
     <div class="metric"><div class="metric-label">Stock bajo</div><div class="metric-value" style="color:#A32D2D">${bajos}</div><div class="metric-sub">bajo mínimo</div></div>
     <div class="metric"><div class="metric-label">Críticos</div><div class="metric-value" style="color:#993C1D">${criticos}</div><div class="metric-sub">bajo 50%</div></div>
-    <div class="metric"><div class="metric-label">Correctos</div><div class="metric-value" style="color:#3B6D11">${stockItems.length - bajos}</div></div>
-  `;
+    <div class="metric"><div class="metric-label">Correctos</div><div class="metric-value" style="color:#3B6D11">${stockItems.length - bajos}</div></div>`;
 }
 
 function filtrarStock() {
   const txt = (document.getElementById('filtro-texto')?.value || '').toLowerCase();
   const grp = document.getElementById('filtro-grupo')?.value || '';
   const est = document.getElementById('filtro-estado')?.value || '';
-
   const items = stockItems.filter(i => {
     if (!i.productos) return false;
     if (txt && !i.productos.nombre.toLowerCase().includes(txt)) return false;
@@ -193,36 +148,27 @@ function filtrarStock() {
     if (est === 'ok' && bajo) return false;
     return true;
   });
-
   const isAdmin = currentUsuario?.rol === 'admin';
   const tbody = document.getElementById('tabla-stock');
   if (!tbody) return;
-
-  if (items.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#aaa;padding:2rem">No se encontraron productos</td></tr>`;
-    return;
-  }
-
+  if (items.length === 0) { tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#aaa;padding:2rem">No se encontraron productos</td></tr>`; return; }
   tbody.innerHTML = items.map(i => {
     const bajo = i.cantidad < i.minimo;
     const pct = i.minimo > 0 ? Math.min(100, Math.round((i.cantidad / i.minimo) * 100)) : 100;
     const color = bajo ? (pct < 50 ? '#993C1D' : '#E24B4A') : '#639922';
     const estado = bajo ? (pct < 50 ? 'crítico' : 'bajo') : 'ok';
     const badgeCls = estado === 'ok' ? 'success' : estado === 'bajo' ? 'warning' : 'danger';
-    const fmt = v => v >= 1 ? parseFloat(v).toFixed(1) : parseFloat(v).toFixed(2);
+    const fmt = v => parseFloat(v) >= 1 ? parseFloat(v).toFixed(1) : parseFloat(v).toFixed(2);
     const minCls = i.minimo_override ? 'min-val min-override' : 'min-val';
-    const resetBtn = i.minimo_override && isAdmin
-      ? `<span class="reset-btn" onclick="resetMinimo('${i.id}')">↺</span>` : '';
+    const resetBtn = i.minimo_override && isAdmin ? `<span class="reset-btn" onclick="resetMinimo('${i.id}')">↺</span>` : '';
     const editMin = isAdmin
       ? `<span class="${minCls}" onclick="editarMinimo(this,'${i.id}','${i.productos.unidad}',${i.minimo})">${fmt(i.minimo)} ${i.productos.unidad}</span>${resetBtn}`
       : `${fmt(i.minimo)} ${i.productos.unidad}`;
-
     return `<tr class="${bajo ? 'low-stock' : ''}">
       <td style="font-weight:${bajo ? '500' : '400'}">${i.productos.nombre}</td>
-      <td>
-        <input type="number" value="${i.cantidad}" min="0" step="0.1"
-          style="width:65px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px"
-          onchange="actualizarStock('${i.id}', this.value)">
+      <td><input type="number" value="${i.cantidad}" min="0" step="0.1"
+        style="width:65px;padding:2px 6px;border:1px solid #ddd;border-radius:4px;font-size:13px"
+        onchange="actualizarStock('${i.id}', this.value)">
         <span style="font-size:11px;color:#aaa">${i.productos.unidad}</span>
         <div class="stock-bar"><div class="stock-fill" style="width:${pct}%;background:${color}"></div></div>
       </td>
@@ -235,13 +181,8 @@ function filtrarStock() {
 }
 
 async function actualizarStock(id, valor) {
-  const { error } = await db.from('stock')
-    .update({ cantidad: parseFloat(valor), updated_at: new Date() })
-    .eq('id', id);
-  if (!error) {
-    const item = stockItems.find(i => i.id === id);
-    if (item) { item.cantidad = parseFloat(valor); actualizarMetricasStock(); }
-  }
+  const { error } = await db.from('stock').update({ cantidad: parseFloat(valor), updated_at: new Date() }).eq('id', id);
+  if (!error) { const item = stockItems.find(i => i.id === id); if (item) { item.cantidad = parseFloat(valor); actualizarMetricasStock(); } }
 }
 
 function editarMinimo(el, id, unidad, current) {
@@ -250,10 +191,7 @@ function editarMinimo(el, id, unidad, current) {
   input.type = 'number'; input.className = 'min-input';
   input.value = current; input.step = unidad === 'pz' ? 1 : 0.1; input.min = 0;
   input.onblur = () => guardarMinimo(id, unidad, input, el);
-  input.onkeydown = e => {
-    if (e.key === 'Enter') input.blur();
-    if (e.key === 'Escape') { input.remove(); el.style.display = ''; }
-  };
+  input.onkeydown = e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.remove(); el.style.display = ''; } };
   el.parentNode.insertBefore(input, el.nextSibling);
   input.focus(); input.select();
 }
@@ -265,8 +203,7 @@ async function guardarMinimo(id, unidad, input, el) {
     const item = stockItems.find(i => i.id === id);
     if (item) { item.minimo = val; item.minimo_override = true; }
   }
-  input.remove();
-  filtrarStock();
+  input.remove(); filtrarStock();
 }
 
 async function resetMinimo(id) {
@@ -278,9 +215,77 @@ async function resetMinimo(id) {
 
 async function cambiarLocal(localId, btn) {
   document.querySelectorAll('.local-btn').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  localActual = localId;
-  await cargarStock();
+  btn.classList.add('active'); localActual = localId; await cargarStock();
+}
+
+// ─── LISTA DE COMPRA ─────────────────────────────────────
+async function renderCompra() {
+  const isAdmin = currentUsuario?.rol === 'admin';
+  const el = document.getElementById('tab-compra');
+  let localSelectorHTML = '';
+  if (isAdmin && locales.length > 0) {
+    localSelectorHTML = `<div class="local-selector">
+      ${locales.map((l, i) => `<button class="local-btn-compra local-btn ${i === 0 ? 'active' : ''}"
+        onclick="cambiarLocalCompra('${l.id}', this)">${l.ciudad}</button>`).join('')}
+    </div>`;
+  }
+  el.innerHTML = `
+    ${localSelectorHTML}
+    <div class="metrics" id="compra-metrics"></div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Productos a reponer</span>
+        <button class="btn btn-sm" onclick="window.print()">🖨️ Imprimir</button>
+      </div>
+      <p class="hint">Cantidad a pedir = mínimo × 1.5 − stock actual. Ordenado por proveedor.</p>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Producto</th><th>Proveedor</th><th>Stock actual</th><th>Mínimo</th><th>Cantidad a pedir</th><th>Urgencia</th></tr></thead>
+          <tbody id="tabla-compra"></tbody>
+        </table>
+      </div>
+    </div>`;
+  await cargarCompra();
+}
+
+async function cargarCompra() {
+  const localId = localCompra || localActual;
+  if (!localId) return;
+  const { data, error } = await db.from('stock').select('*, productos(*)').eq('local_id', localId);
+  if (error || !data) return;
+  const bajos = data.filter(i => i.productos && i.cantidad < i.minimo)
+    .sort((a, b) => a.productos.proveedor.localeCompare(b.productos.proveedor));
+  const nProveedores = [...new Set(bajos.map(i => i.productos.proveedor))].length;
+  const criticos = bajos.filter(i => i.cantidad < i.minimo * 0.5).length;
+  document.getElementById('compra-metrics').innerHTML = `
+    <div class="metric"><div class="metric-label">Productos a pedir</div><div class="metric-value" style="color:#A32D2D">${bajos.length}</div></div>
+    <div class="metric"><div class="metric-label">Críticos</div><div class="metric-value" style="color:#993C1D">${criticos}</div><div class="metric-sub">bajo 50% del mínimo</div></div>
+    <div class="metric"><div class="metric-label">Proveedores</div><div class="metric-value">${nProveedores}</div></div>`;
+  if (bajos.length === 0) {
+    document.getElementById('tabla-compra').innerHTML = `<tr><td colspan="6" style="text-align:center;color:#3B6D11;padding:2rem;font-weight:500">✅ Todo el stock está por encima del mínimo</td></tr>`;
+    return;
+  }
+  const fmt = v => parseFloat(v) >= 1 ? parseFloat(v).toFixed(1) : parseFloat(v).toFixed(2);
+  document.getElementById('tabla-compra').innerHTML = bajos.map(i => {
+    const pedir = Math.max(0, (i.minimo * 1.5) - i.cantidad);
+    const pct = i.minimo > 0 ? Math.round((i.cantidad / i.minimo) * 100) : 0;
+    const critico = i.cantidad < i.minimo * 0.5;
+    return `<tr class="low-stock">
+      <td style="font-weight:500">${i.productos.nombre}</td>
+      <td style="color:#888;font-size:12px">${i.productos.proveedor}</td>
+      <td>${fmt(i.cantidad)} <span style="font-size:11px;color:#aaa">${i.productos.unidad}</span>
+        <div class="stock-bar"><div class="stock-fill" style="width:${pct}%;background:${critico ? '#993C1D' : '#E24B4A'}"></div></div>
+      </td>
+      <td style="color:#888">${fmt(i.minimo)} ${i.productos.unidad}</td>
+      <td style="font-weight:600;color:#1a1a1a">${fmt(pedir)} ${i.productos.unidad}</td>
+      <td><span class="badge badge-${critico ? 'danger' : 'warning'}">${critico ? '🔴 Crítico' : '🟡 Bajo'}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function cambiarLocalCompra(localId, btn) {
+  document.querySelectorAll('.local-btn-compra').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active'); localCompra = localId; await cargarCompra();
 }
 
 // ─── PEDIDOS ─────────────────────────────────────────────
@@ -294,11 +299,26 @@ async function renderPedidos() {
         <span class="card-title">Pedidos a proveedores</span>
         <button class="btn btn-primary btn-sm" onclick="toggleFormPedido()">+ Nuevo pedido</button>
       </div>
+      <div class="filters">
+        <select id="filtro-pedido-estado" onchange="cargarPedidos()"
+          style="padding:7px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+          <option value="">Todos los estados</option>
+          <option value="pendiente">Pendiente</option>
+          <option value="en tránsito">En tránsito</option>
+          <option value="recibido">Recibido</option>
+          <option value="cancelado">Cancelado</option>
+        </select>
+        ${isAdmin ? `<select id="filtro-pedido-local" onchange="cargarPedidos()"
+          style="padding:7px 12px;border:1px solid #ddd;border-radius:8px;font-size:13px">
+          <option value="">Todos los locales</option>
+          ${locales.map(l => `<option value="${l.id}">${l.ciudad}</option>`).join('')}
+        </select>` : ''}
+      </div>
       <div style="overflow-x:auto">
         <table>
           <thead><tr>
             <th>Proveedor</th>${isAdmin ? '<th>Local</th>' : ''}
-            <th>Importe</th><th>Fecha entrega</th><th>Estado</th><th>Notas</th>
+            <th>Importe</th><th>Fecha entrega</th><th>Estado</th><th>Notas</th><th></th>
           </tr></thead>
           <tbody id="tabla-pedidos"></tbody>
         </table>
@@ -337,24 +357,48 @@ async function renderPedidos() {
 
 async function cargarPedidos() {
   const isAdmin = currentUsuario?.rol === 'admin';
+  const filtroEstado = document.getElementById('filtro-pedido-estado')?.value || '';
+  const filtroLocal = document.getElementById('filtro-pedido-local')?.value || '';
   let query = db.from('pedidos').select('*, locales(ciudad)').order('created_at', { ascending: false });
   if (!isAdmin) query = query.eq('local_id', localActual);
+  if (filtroEstado) query = query.eq('estado', filtroEstado);
+  if (isAdmin && filtroLocal) query = query.eq('local_id', filtroLocal);
   const { data } = await query;
   const pedidos = data || [];
   const pendientes = pedidos.filter(p => p.estado === 'pendiente' || p.estado === 'en tránsito').length;
+  const totalImporte = pedidos.reduce((s, p) => s + (p.importe || 0), 0);
   document.getElementById('pedidos-metrics').innerHTML = `
-    <div class="metric"><div class="metric-label">Total</div><div class="metric-value">${pedidos.length}</div></div>
+    <div class="metric"><div class="metric-label">Total pedidos</div><div class="metric-value">${pedidos.length}</div></div>
     <div class="metric"><div class="metric-label">En tránsito</div><div class="metric-value">${pendientes}</div></div>
-  `;
+    <div class="metric"><div class="metric-label">Importe total</div><div class="metric-value">${totalImporte.toFixed(0)}€</div></div>`;
   const badgeMap = { 'recibido': 'success', 'en tránsito': 'info', 'pendiente': 'warning', 'cancelado': 'danger' };
   document.getElementById('tabla-pedidos').innerHTML = pedidos.map(p => `<tr>
     <td>${p.proveedor}</td>
     ${isAdmin ? `<td style="color:#888">${p.locales?.ciudad || ''}</td>` : ''}
     <td>${p.importe ? p.importe + '€' : '—'}</td>
     <td style="color:#888">${p.fecha_entrega || '—'}</td>
-    <td><span class="badge badge-${badgeMap[p.estado] || 'info'}">${p.estado}</span></td>
+    <td>
+      <select onchange="cambiarEstadoPedido('${p.id}', this.value)"
+        style="padding:3px 8px;border:1px solid #ddd;border-radius:6px;font-size:12px">
+        ${['pendiente','en tránsito','recibido','cancelado'].map(e =>
+          `<option value="${e}" ${p.estado === e ? 'selected' : ''}>${e}</option>`).join('')}
+      </select>
+    </td>
     <td style="color:#888;font-size:12px">${p.notas || ''}</td>
-  </tr>`).join('') || '<tr><td colspan="6" style="text-align:center;color:#aaa;padding:1rem">No hay pedidos</td></tr>';
+    <td><button class="btn btn-sm" style="font-size:11px;color:#E24B4A;border-color:#E24B4A"
+      onclick="borrarPedido('${p.id}')">✕</button></td>
+  </tr>`).join('') || `<tr><td colspan="${isAdmin ? 7 : 6}" style="text-align:center;color:#aaa;padding:1rem">No hay pedidos</td></tr>`;
+}
+
+async function cambiarEstadoPedido(id, estado) {
+  await db.from('pedidos').update({ estado }).eq('id', id);
+  await cargarPedidos();
+}
+
+async function borrarPedido(id) {
+  if (!confirm('¿Borrar este pedido?')) return;
+  await db.from('pedidos').delete().eq('id', id);
+  await cargarPedidos();
 }
 
 function toggleFormPedido() {
@@ -377,11 +421,316 @@ async function crearPedido() {
   await cargarPedidos();
 }
 
+// ─── ALBARANES ───────────────────────────────────────────
+let lineasAlbaran = [];
+
+async function renderAlbaranes() {
+  const isAdmin = currentUsuario?.rol === 'admin';
+  const el = document.getElementById('tab-albaranes');
+  el.innerHTML = `
+    <div class="metrics" id="albaran-metrics"></div>
+
+    <!-- Lista de albaranes -->
+    <div class="card" id="card-lista-albaranes">
+      <div class="card-header">
+        <span class="card-title">Albaranes registrados</span>
+        <button class="btn btn-primary btn-sm" onclick="mostrarFormAlbaran()">+ Nuevo albarán</button>
+      </div>
+      ${isAdmin ? `<div class="local-selector" style="margin-bottom:12px">
+        ${locales.map((l, i) => `<button class="local-btn-alb local-btn ${i === 0 ? 'active' : ''}"
+          onclick="cambiarLocalAlbaran('${l.id}', this)">${l.ciudad}</button>`).join('')}
+      </div>` : ''}
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr><th>Fecha</th><th>Proveedor</th>${isAdmin ? '<th>Local</th>' : ''}<th>Nº Albarán</th><th>Total</th><th>Líneas</th><th></th></tr></thead>
+          <tbody id="tabla-albaranes"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Formulario nuevo albarán -->
+    <div class="card" id="form-albaran" style="display:none">
+      <div class="card-header">
+        <span class="card-title">Nuevo albarán</span>
+        <button class="btn btn-sm" onclick="ocultarFormAlbaran()">✕ Cancelar</button>
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Proveedor</label>
+          <select id="alb-prov">
+            <option>CRISTIAN MARTIN</option><option>MERCADONA</option><option>PUNTOQPACK</option>
+            <option>CONPE</option><option>ALGIRSO</option><option>PATRICIO PEREZ</option>
+            <option>CARLOS TEXEIRA</option><option>GARCIA DE POU</option><option>UNICASH</option>
+            <option>FABRIPAN</option><option>DIA</option>
+          </select>
+        </div>
+        ${isAdmin ? `<div class="form-group"><label>Local</label>
+          <select id="alb-local">${locales.map(l => `<option value="${l.id}">${l.ciudad}</option>`).join('')}</select>
+        </div>` : ''}
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Número de albarán</label><input type="text" id="alb-numero" placeholder="Ej: ALB-2024-001"></div>
+        <div class="form-group"><label>Fecha</label><input type="date" id="alb-fecha" value="${new Date().toISOString().split('T')[0]}"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:16px"><label>Notas</label><input type="text" id="alb-notas" placeholder="Notas adicionales..."></div>
+
+      <!-- Líneas del albarán -->
+      <div class="card-title" style="margin-bottom:12px">Líneas del albarán</div>
+      <p class="hint">Añade cada producto recibido con su cantidad y precio unitario. El stock se actualizará automáticamente al guardar.</p>
+
+      <div style="overflow-x:auto;margin-bottom:12px">
+        <table>
+          <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unitario (€)</th><th>Subtotal</th><th></th></tr></thead>
+          <tbody id="tabla-lineas-albaran"></tbody>
+        </table>
+      </div>
+
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:end;margin-bottom:16px">
+        <div class="form-group" style="margin:0"><label>Producto</label>
+          <select id="linea-producto">
+            <option value="">Seleccionar producto...</option>
+            ${productos.map(p => `<option value="${p.id}" data-unidad="${p.unidad}" data-precio="${p.coste}">${p.nombre}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group" style="margin:0"><label>Cantidad</label>
+          <input type="number" id="linea-cantidad" placeholder="0" min="0" step="0.01">
+        </div>
+        <div class="form-group" style="margin:0"><label>Precio unitario (€)</label>
+          <input type="number" id="linea-precio" placeholder="0.00" min="0" step="0.0001">
+        </div>
+        <button class="btn btn-primary" style="margin-top:20px" onclick="agregarLinea()">+ Añadir</button>
+      </div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-size:15px;font-weight:500">Total albarán: <span id="total-albaran">0.00€</span></div>
+        <button class="btn btn-primary" onclick="guardarAlbaran()">💾 Guardar albarán y actualizar stock</button>
+      </div>
+    </div>
+
+    <!-- Historial de precios -->
+    <div class="card" id="card-historial-precios" style="display:none">
+      <div class="card-header">
+        <span class="card-title">📈 Historial de precios</span>
+        <button class="btn btn-sm" onclick="document.getElementById('card-historial-precios').style.display='none'">✕</button>
+      </div>
+      <div id="contenido-historial"></div>
+    </div>`;
+
+  lineasAlbaran = [];
+  await cargarAlbaranes();
+  actualizarTotalAlbaran();
+
+  // Autocompletar precio al seleccionar producto
+  document.getElementById('linea-producto').addEventListener('change', function() {
+    const opt = this.options[this.selectedIndex];
+    const precio = opt.getAttribute('data-precio');
+    if (precio && parseFloat(precio) > 0) {
+      document.getElementById('linea-precio').value = parseFloat(precio).toFixed(4);
+    }
+  });
+}
+
+let localAlbaran = null;
+
+async function cargarAlbaranes() {
+  const isAdmin = currentUsuario?.rol === 'admin';
+  const localId = localAlbaran || localActual;
+  let query = db.from('albaranes')
+    .select('*, locales(ciudad), albaran_lineas(id)')
+    .order('fecha', { ascending: false });
+  if (!isAdmin) query = query.eq('local_id', localActual);
+  else if (localId) query = query.eq('local_id', localId);
+  const { data } = await query;
+  const albaranes = data || [];
+  const totalMes = albaranes.reduce((s, a) => s + (a.importe_total || 0), 0);
+  document.getElementById('albaran-metrics').innerHTML = `
+    <div class="metric"><div class="metric-label">Albaranes registrados</div><div class="metric-value">${albaranes.length}</div></div>
+    <div class="metric"><div class="metric-label">Importe total</div><div class="metric-value">${totalMes.toFixed(0)}€</div></div>
+    <div class="metric"><div class="metric-label">Análisis precios</div>
+      <div style="margin-top:6px"><button class="btn btn-sm" onclick="mostrarHistorialPrecios()">Ver historial ↗</button></div>
+    </div>`;
+  document.getElementById('tabla-albaranes').innerHTML = albaranes.map(a => `<tr>
+    <td>${a.fecha}</td>
+    <td style="font-weight:500">${a.proveedor}</td>
+    ${isAdmin ? `<td style="color:#888">${a.locales?.ciudad || ''}</td>` : ''}
+    <td style="color:#888">${a.numero_albaran || '—'}</td>
+    <td style="font-weight:500">${a.importe_total ? a.importe_total.toFixed(2) + '€' : '—'}</td>
+    <td style="color:#888">${a.albaran_lineas?.length || 0} productos</td>
+    <td><button class="btn btn-sm" onclick="verDetalleAlbaran('${a.id}')">Ver ↗</button></td>
+  </tr>`).join('') || `<tr><td colspan="${isAdmin ? 7 : 6}" style="text-align:center;color:#aaa;padding:1rem">No hay albaranes registrados</td></tr>`;
+}
+
+async function cambiarLocalAlbaran(localId, btn) {
+  document.querySelectorAll('.local-btn-alb').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active'); localAlbaran = localId; await cargarAlbaranes();
+}
+
+function mostrarFormAlbaran() {
+  document.getElementById('form-albaran').style.display = 'block';
+  document.getElementById('form-albaran').scrollIntoView({ behavior: 'smooth' });
+}
+
+function ocultarFormAlbaran() {
+  document.getElementById('form-albaran').style.display = 'none';
+  lineasAlbaran = []; renderLineas();
+}
+
+function agregarLinea() {
+  const sel = document.getElementById('linea-producto');
+  const productoId = sel.value;
+  const nombre = sel.options[sel.selectedIndex]?.text;
+  const unidad = sel.options[sel.selectedIndex]?.getAttribute('data-unidad');
+  const cantidad = parseFloat(document.getElementById('linea-cantidad').value);
+  const precio = parseFloat(document.getElementById('linea-precio').value);
+  if (!productoId) { alert('Selecciona un producto'); return; }
+  if (!cantidad || cantidad <= 0) { alert('Introduce una cantidad válida'); return; }
+  if (!precio || precio <= 0) { alert('Introduce un precio válido'); return; }
+  lineasAlbaran.push({ productoId, nombre, unidad, cantidad, precio, subtotal: cantidad * precio });
+  document.getElementById('linea-producto').value = '';
+  document.getElementById('linea-cantidad').value = '';
+  document.getElementById('linea-precio').value = '';
+  renderLineas();
+}
+
+function renderLineas() {
+  const tbody = document.getElementById('tabla-lineas-albaran');
+  if (!tbody) return;
+  if (lineasAlbaran.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:#aaa;padding:1rem">Sin líneas añadidas</td></tr>`;
+  } else {
+    tbody.innerHTML = lineasAlbaran.map((l, idx) => `<tr>
+      <td style="font-weight:500">${l.nombre}</td>
+      <td>${l.cantidad} ${l.unidad}</td>
+      <td>${l.precio.toFixed(4)}€</td>
+      <td style="font-weight:500">${l.subtotal.toFixed(2)}€</td>
+      <td><button class="btn btn-sm" style="color:#E24B4A;border-color:#E24B4A"
+        onclick="borrarLinea(${idx})">✕</button></td>
+    </tr>`).join('');
+  }
+  actualizarTotalAlbaran();
+}
+
+function borrarLinea(idx) {
+  lineasAlbaran.splice(idx, 1); renderLineas();
+}
+
+function actualizarTotalAlbaran() {
+  const total = lineasAlbaran.reduce((s, l) => s + l.subtotal, 0);
+  const el = document.getElementById('total-albaran');
+  if (el) el.textContent = total.toFixed(2) + '€';
+}
+
+async function guardarAlbaran() {
+  if (lineasAlbaran.length === 0) { alert('Añade al menos un producto al albarán'); return; }
+  const isAdmin = currentUsuario?.rol === 'admin';
+  const localId = isAdmin ? document.getElementById('alb-local').value : localActual;
+  const total = lineasAlbaran.reduce((s, l) => s + l.subtotal, 0);
+
+  const { data: albaran, error } = await db.from('albaranes').insert({
+    local_id: localId,
+    proveedor: document.getElementById('alb-prov').value,
+    numero_albaran: document.getElementById('alb-numero').value || null,
+    fecha: document.getElementById('alb-fecha').value,
+    importe_total: total,
+    notas: document.getElementById('alb-notas').value || null
+  }).select().single();
+
+  if (error) { alert('Error guardando albarán: ' + error.message); return; }
+
+  // Insertar líneas — el trigger actualiza el stock automáticamente
+  const lineas = lineasAlbaran.map(l => ({
+    albaran_id: albaran.id,
+    producto_id: l.productoId,
+    cantidad: l.cantidad,
+    precio_unitario: l.precio
+  }));
+
+  const { error: errorLineas } = await db.from('albaran_lineas').insert(lineas);
+  if (errorLineas) { alert('Error guardando líneas: ' + errorLineas.message); return; }
+
+  alert(`✅ Albarán guardado correctamente.\nEl stock de ${lineasAlbaran.length} productos ha sido actualizado automáticamente.`);
+  lineasAlbaran = [];
+  ocultarFormAlbaran();
+  await cargarAlbaranes();
+  await cargarStock();
+}
+
+async function verDetalleAlbaran(id) {
+  const { data } = await db.from('albaran_lineas')
+    .select('*, productos(nombre, unidad)').eq('albaran_id', id);
+  const lineas = data || [];
+  const html = `<div style="overflow-x:auto"><table>
+    <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio unitario</th><th>Subtotal</th></tr></thead>
+    <tbody>${lineas.map(l => `<tr>
+      <td>${l.productos?.nombre || ''}</td>
+      <td>${l.cantidad} ${l.productos?.unidad || ''}</td>
+      <td>${parseFloat(l.precio_unitario).toFixed(4)}€</td>
+      <td style="font-weight:500">${parseFloat(l.subtotal).toFixed(2)}€</td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+  const card = document.getElementById('card-historial-precios');
+  document.getElementById('contenido-historial').innerHTML = html;
+  document.querySelector('#card-historial-precios .card-title').textContent = 'Detalle del albarán';
+  card.style.display = 'block';
+  card.scrollIntoView({ behavior: 'smooth' });
+}
+
+async function mostrarHistorialPrecios() {
+  const { data } = await db.from('albaran_lineas')
+    .select('producto_id, precio_unitario, cantidad, created_at, productos(nombre, unidad), albaranes(fecha, proveedor)')
+    .order('created_at', { ascending: false });
+  if (!data || data.length === 0) {
+    document.getElementById('contenido-historial').innerHTML = '<p style="color:#aaa;padding:1rem">No hay albaranes registrados todavía.</p>';
+    document.getElementById('card-historial-precios').style.display = 'block';
+    return;
+  }
+  // Agrupar por producto
+  const porProducto = {};
+  data.forEach(l => {
+    const nombre = l.productos?.nombre || l.producto_id;
+    if (!porProducto[nombre]) porProducto[nombre] = [];
+    porProducto[nombre].push(l);
+  });
+  const html = Object.entries(porProducto).map(([nombre, registros]) => {
+    const precios = registros.map(r => parseFloat(r.precio_unitario));
+    const precioMin = Math.min(...precios);
+    const precioMax = Math.max(...precios);
+    const precioActual = precios[0];
+    const variacion = precios.length > 1 ? ((precioActual - precios[precios.length - 1]) / precios[precios.length - 1] * 100) : 0;
+    const color = variacion > 5 ? '#E24B4A' : variacion < -5 ? '#3B6D11' : '#888';
+    const arrow = variacion > 5 ? '↑' : variacion < -5 ? '↓' : '→';
+    return `<div style="border-bottom:1px solid #f5f5f5;padding:12px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+          <div style="font-weight:500;font-size:14px">${nombre}</div>
+          <div style="font-size:12px;color:#888">${registros.length} compra${registros.length > 1 ? 's' : ''} registradas</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:16px;font-weight:500">${precioActual.toFixed(4)}€ <span style="color:${color};font-size:13px">${arrow} ${Math.abs(variacion).toFixed(1)}%</span></div>
+          <div style="font-size:11px;color:#aaa">Mín: ${precioMin.toFixed(4)}€ · Máx: ${precioMax.toFixed(4)}€</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto;margin-top:8px">
+        <table style="font-size:12px">
+          <thead><tr><th>Fecha</th><th>Proveedor</th><th>Cantidad</th><th>Precio</th></tr></thead>
+          <tbody>${registros.map(r => `<tr>
+            <td>${r.albaranes?.fecha || ''}</td>
+            <td style="color:#888">${r.albaranes?.proveedor || ''}</td>
+            <td>${r.cantidad} ${r.productos?.unidad || ''}</td>
+            <td style="font-weight:${r.precio_unitario === precioMax ? '600' : '400'};color:${parseFloat(r.precio_unitario) === precioMax && precios.length > 1 ? '#E24B4A' : 'inherit'}">${parseFloat(r.precio_unitario).toFixed(4)}€</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('contenido-historial').innerHTML = html;
+  document.querySelector('#card-historial-precios .card-title').textContent = '📈 Historial de precios por producto';
+  document.getElementById('card-historial-precios').style.display = 'block';
+  document.getElementById('card-historial-precios').scrollIntoView({ behavior: 'smooth' });
+}
+
 // ─── TRASPASOS ───────────────────────────────────────────
 async function renderTraspasos() {
   const el = document.getElementById('tab-traspasos');
-  const { data: prods } = await db.from('productos').select('id, nombre').order('nombre');
-  const productos = prods || [];
   el.innerHTML = `
     <div class="card">
       <div class="card-header">
@@ -526,120 +875,6 @@ async function crearUsuario() {
   await cargarUsuarios();
 }
 
-// ─── LISTA DE COMPRA ─────────────────────────────────────
-async function renderCompra() {
-  const isAdmin = currentUsuario?.rol === 'admin';
-  const el = document.getElementById('tab-compra');
-
-  let localSelectorHTML = '';
-  if (isAdmin && locales.length > 0) {
-    localSelectorHTML = `<div class="local-selector">
-      ${locales.map((l, i) => `
-        <button class="local-btn-compra local-btn ${i === 0 ? 'active' : ''}"
-          onclick="cambiarLocalCompra('${l.id}', this)">${l.ciudad}</button>
-      `).join('')}
-    </div>`;
-  }
-
-  el.innerHTML = `
-    ${localSelectorHTML}
-    <div class="metrics" id="compra-metrics"></div>
-    <div class="card">
-      <div class="card-header">
-        <span class="card-title">Productos a reponer</span>
-        <button class="btn btn-sm" onclick="imprimirCompra()">🖨️ Imprimir</button>
-      </div>
-      <p class="hint">Cantidad a pedir = mínimo × 1.5 − stock actual. Ordenado por proveedor.</p>
-      <div style="overflow-x:auto">
-        <table>
-          <thead><tr>
-            <th>Producto</th><th>Proveedor</th><th>Stock actual</th>
-            <th>Mínimo</th><th>Pedir</th><th>Urgencia</th>
-          </tr></thead>
-          <tbody id="tabla-compra"></tbody>
-        </table>
-      </div>
-    </div>`;
-
-  await cargarCompra();
-}
-
-let localCompra = null;
-
-async function cargarCompra() {
-  const localId = localCompra || localActual;
-  if (!localId) return;
-
-  const { data, error } = await db
-    .from('stock')
-    .select('*, productos(*)')
-    .eq('local_id', localId);
-
-  if (error || !data) return;
-
-  // Filtrar solo los que están por debajo del mínimo
-  const bajos = data
-    .filter(i => i.productos && i.cantidad < i.minimo)
-    .sort((a, b) => a.productos.proveedor.localeCompare(b.productos.proveedor));
-
-  // Métricas
-  const totalPedido = bajos.length;
-  const criticos = bajos.filter(i => i.cantidad < i.minimo * 0.5).length;
-  document.getElementById('compra-metrics').innerHTML = `
-    <div class="metric"><div class="metric-label">Productos a pedir</div>
-      <div class="metric-value" style="color:#A32D2D">${totalPedido}</div></div>
-    <div class="metric"><div class="metric-label">Críticos</div>
-      <div class="metric-value" style="color:#993C1D">${criticos}</div>
-      <div class="metric-sub">bajo 50% del mínimo</div></div>
-    <div class="metric"><div class="metric-label">Proveedores</div>
-      <div class="metric-value">${[...new Set(bajos.map(i => i.productos.proveedor))].length}</div></div>
-  `;
-
-  if (bajos.length === 0) {
-    document.getElementById('tabla-compra').innerHTML =
-      `<tr><td colspan="6" style="text-align:center;color:#3B6D11;padding:2rem;font-weight:500">
-        ✅ Todo el stock está por encima del mínimo
-      </td></tr>`;
-    return;
-  }
-
-  const fmt = v => parseFloat(v) >= 1 ? parseFloat(v).toFixed(1) : parseFloat(v).toFixed(2);
-
-  document.getElementById('tabla-compra').innerHTML = bajos.map(i => {
-    const pedir = Math.max(0, (i.minimo * 1.5) - i.cantidad);
-    const pct = i.minimo > 0 ? Math.round((i.cantidad / i.minimo) * 100) : 0;
-    const critico = i.cantidad < i.minimo * 0.5;
-    const badgeCls = critico ? 'danger' : 'warning';
-    const badgeTxt = critico ? '🔴 Crítico' : '🟡 Bajo';
-
-    return `<tr class="low-stock">
-      <td style="font-weight:500">${i.productos.nombre}</td>
-      <td style="color:#888;font-size:12px">${i.productos.proveedor}</td>
-      <td>
-        ${fmt(i.cantidad)} <span style="font-size:11px;color:#aaa">${i.productos.unidad}</span>
-        <div class="stock-bar">
-          <div class="stock-fill" style="width:${pct}%;background:${critico ? '#993C1D' : '#E24B4A'}"></div>
-        </div>
-      </td>
-      <td style="color:#888">${fmt(i.minimo)} ${i.productos.unidad}</td>
-      <td style="font-weight:600;color:#1a1a1a">
-        ${fmt(pedir)} ${i.productos.unidad}
-      </td>
-      <td><span class="badge badge-${badgeCls}">${badgeTxt}</span></td>
-    </tr>`;
-  }).join('');
-}
-
-async function cambiarLocalCompra(localId, btn) {
-  document.querySelectorAll('.local-btn-compra').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  localCompra = localId;
-  await cargarCompra();
-}
-
-function imprimirCompra() {
-  window.print();
-}
 // ─── INIT ────────────────────────────────────────────────
 db.auth.getSession().then(({ data: { session } }) => {
   if (session) { currentUser = session.user; iniciarApp(); }
