@@ -31,17 +31,17 @@
 
     <div class="tabs" id="tabs">
       <button class="tab active" onclick="showTab('stock', this)">Stock</button>
+      <button class="tab" onclick="showTab('compra', this)">🛒 Lista de compra</button>
       <button class="tab" onclick="showTab('pedidos', this)">Pedidos</button>
       <button class="tab" onclick="showTab('traspasos', this)">Traspasos</button>
-      <button class="tab" onclick="showTab('compra', this)">🛒 Lista de compra</button>
       <button class="tab admin-only" onclick="showTab('admin', this)">Admin</button>
     </div>
 
     <div class="content">
       <div id="tab-stock" class="tab-content active"></div>
+      <div id="tab-compra" class="tab-content"></div>
       <div id="tab-pedidos" class="tab-content"></div>
       <div id="tab-traspasos" class="tab-content"></div>
-      <div id="tab-compra" class="tab-content"></div>
       <div id="tab-admin" class="tab-content admin-only"></div>
     </div>
   </div>
