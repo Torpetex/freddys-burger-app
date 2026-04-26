@@ -64,6 +64,7 @@ async function iniciarApp() {
   await renderPedidos();
   await renderTraspasos();
   if (isAdmin) await renderAdmin();
+  await renderCompra();
 }
 
 // ─── TABS ────────────────────────────────────────────────
