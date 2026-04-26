@@ -525,6 +525,120 @@ async function crearUsuario() {
   await cargarUsuarios();
 }
 
+// ─── LISTA DE COMPRA ─────────────────────────────────────
+async function renderCompra() {
+  const isAdmin = currentUsuario?.rol === 'admin';
+  const el = document.getElementById('tab-compra');
+
+  let localSelectorHTML = '';
+  if (isAdmin && locales.length > 0) {
+    localSelectorHTML = `<div class="local-selector">
+      ${locales.map((l, i) => `
+        <button class="local-btn-compra local-btn ${i === 0 ? 'active' : ''}"
+          onclick="cambiarLocalCompra('${l.id}', this)">${l.ciudad}</button>
+      `).join('')}
+    </div>`;
+  }
+
+  el.innerHTML = `
+    ${localSelectorHTML}
+    <div class="metrics" id="compra-metrics"></div>
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">Productos a reponer</span>
+        <button class="btn btn-sm" onclick="imprimirCompra()">🖨️ Imprimir</button>
+      </div>
+      <p class="hint">Cantidad a pedir = mínimo × 1.5 − stock actual. Ordenado por proveedor.</p>
+      <div style="overflow-x:auto">
+        <table>
+          <thead><tr>
+            <th>Producto</th><th>Proveedor</th><th>Stock actual</th>
+            <th>Mínimo</th><th>Pedir</th><th>Urgencia</th>
+          </tr></thead>
+          <tbody id="tabla-compra"></tbody>
+        </table>
+      </div>
+    </div>`;
+
+  await cargarCompra();
+}
+
+let localCompra = null;
+
+async function cargarCompra() {
+  const localId = localCompra || localActual;
+  if (!localId) return;
+
+  const { data, error } = await db
+    .from('stock')
+    .select('*, productos(*)')
+    .eq('local_id', localId);
+
+  if (error || !data) return;
+
+  // Filtrar solo los que están por debajo del mínimo
+  const bajos = data
+    .filter(i => i.productos && i.cantidad < i.minimo)
+    .sort((a, b) => a.productos.proveedor.localeCompare(b.productos.proveedor));
+
+  // Métricas
+  const totalPedido = bajos.length;
+  const criticos = bajos.filter(i => i.cantidad < i.minimo * 0.5).length;
+  document.getElementById('compra-metrics').innerHTML = `
+    <div class="metric"><div class="metric-label">Productos a pedir</div>
+      <div class="metric-value" style="color:#A32D2D">${totalPedido}</div></div>
+    <div class="metric"><div class="metric-label">Críticos</div>
+      <div class="metric-value" style="color:#993C1D">${criticos}</div>
+      <div class="metric-sub">bajo 50% del mínimo</div></div>
+    <div class="metric"><div class="metric-label">Proveedores</div>
+      <div class="metric-value">${[...new Set(bajos.map(i => i.productos.proveedor))].length}</div></div>
+  `;
+
+  if (bajos.length === 0) {
+    document.getElementById('tabla-compra').innerHTML =
+      `<tr><td colspan="6" style="text-align:center;color:#3B6D11;padding:2rem;font-weight:500">
+        ✅ Todo el stock está por encima del mínimo
+      </td></tr>`;
+    return;
+  }
+
+  const fmt = v => parseFloat(v) >= 1 ? parseFloat(v).toFixed(1) : parseFloat(v).toFixed(2);
+
+  document.getElementById('tabla-compra').innerHTML = bajos.map(i => {
+    const pedir = Math.max(0, (i.minimo * 1.5) - i.cantidad);
+    const pct = i.minimo > 0 ? Math.round((i.cantidad / i.minimo) * 100) : 0;
+    const critico = i.cantidad < i.minimo * 0.5;
+    const badgeCls = critico ? 'danger' : 'warning';
+    const badgeTxt = critico ? '🔴 Crítico' : '🟡 Bajo';
+
+    return `<tr class="low-stock">
+      <td style="font-weight:500">${i.productos.nombre}</td>
+      <td style="color:#888;font-size:12px">${i.productos.proveedor}</td>
+      <td>
+        ${fmt(i.cantidad)} <span style="font-size:11px;color:#aaa">${i.productos.unidad}</span>
+        <div class="stock-bar">
+          <div class="stock-fill" style="width:${pct}%;background:${critico ? '#993C1D' : '#E24B4A'}"></div>
+        </div>
+      </td>
+      <td style="color:#888">${fmt(i.minimo)} ${i.productos.unidad}</td>
+      <td style="font-weight:600;color:#1a1a1a">
+        ${fmt(pedir)} ${i.productos.unidad}
+      </td>
+      <td><span class="badge badge-${badgeCls}">${badgeTxt}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+async function cambiarLocalCompra(localId, btn) {
+  document.querySelectorAll('.local-btn-compra').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  localCompra = localId;
+  await cargarCompra();
+}
+
+function imprimirCompra() {
+  window.print();
+}
 // ─── INIT ────────────────────────────────────────────────
 db.auth.getSession().then(({ data: { session } }) => {
   if (session) { currentUser = session.user; iniciarApp(); }
