@@ -42,12 +42,17 @@ async function mostrarApp() {
   const { data: ls } = await db.from('locales').select('*').order('ciudad');
   locales = ls || [];
 
-  const isAdmin = currentUsuario?.rol === 'admin';
+    const isAdmin = currentUsuario?.rol === 'admin';
   if (isAdmin) {
     document.getElementById('app').classList.add('is-admin');
     localActual = locales[0]?.id;
   } else {
     localActual = currentUsuario?.local_id;
+  }
+
+  if (!localActual) {
+    console.error('No se pudo determinar el local actual');
+    return;
   }
 
   document.getElementById('nav-local').textContent =
@@ -128,12 +133,23 @@ async function renderStock() {
 let stockItems = [];
 
 async function cargarStock() {
-  const { data } = await db
+  if (!localActual) return;
+  
+  const { data, error } = await db
     .from('stock')
     .select('*, productos(*)')
-    .eq('local_id', localActual)
-    .order('productos(nombre)');
-  stockItems = data || [];
+    .eq('local_id', localActual);
+
+  if (error) {
+    console.error('Error cargando stock:', error);
+    return;
+  }
+
+  // Ordenar por nombre de producto
+  stockItems = (data || []).sort((a, b) => 
+    a.productos.nombre.localeCompare(b.productos.nombre)
+  );
+
   actualizarMetricasStock();
   filtrarStock();
 }
